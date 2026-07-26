@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { isValidCategory, cleanString, isPositiveNumber, isNonNegativeInt } = require("../utils/validators");
 
 async function listProducts(req, res) {
   const { category, brandId, sort } = req.query;
@@ -50,12 +51,30 @@ async function getProduct(req, res) {
   }
 }
 
-// Requires brand auth (req.brandId set by middleware). Brand adds a product to their own catalog.
 async function createProduct(req, res) {
-  const { name, description, category, price, sizes } = req.body;
-  if (!name || !category || !price || !Array.isArray(sizes) || sizes.length === 0) {
-    return res.status(400).json({ error: "Name, category, price, and at least one size are required." });
+  const name = cleanString(req.body.name, 160);
+  const description = cleanString(req.body.description, 4000);
+  const category = req.body.category;
+  const price = req.body.price;
+  const sizes = req.body.sizes;
+
+  if (!name || !category || !isPositiveNumber(price) || !Array.isArray(sizes) || sizes.length === 0) {
+    return res.status(400).json({ error: "Name, category, a positive price, and at least one size are required." });
   }
+  if (!isValidCategory(category)) {
+    return res.status(400).json({ error: "Choose a valid category." });
+  }
+  if (sizes.length > 30) {
+    return res.status(400).json({ error: "Too many size variants (max 30)." });
+  }
+  for (const s of sizes) {
+    const size = cleanString(s.size, 20);
+    if (!size) return res.status(400).json({ error: "Each size variant needs a size label." });
+    if (s.stockQty !== undefined && !isNonNegativeInt(s.stockQty)) {
+      return res.status(400).json({ error: "Stock quantity must be a non-negative whole number." });
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -67,9 +86,11 @@ async function createProduct(req, res) {
     const productId = productRes.rows[0].id;
 
     for (const s of sizes) {
+      const size = cleanString(s.size, 20);
+      const sku = cleanString(s.sku, 60);
       await client.query(
         `INSERT INTO product_variants (product_id, size, sku, stock_qty) VALUES ($1,$2,$3,$4)`,
-        [productId, s.size, s.sku || null, s.stockQty || 0]
+        [productId, size, sku || null, s.stockQty || 0]
       );
     }
     await client.query("COMMIT");
