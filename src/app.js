@@ -4,6 +4,7 @@ const cors = require("cors");
 const brandsRoutes = require("./routes/brands");
 const productsRoutes = require("./routes/products");
 const ordersRoutes = require("./routes/orders");
+const adminRoutes = require("./routes/admin");
 
 const app = express();
 
@@ -20,6 +21,7 @@ app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 app.use("/api/brands", brandsRoutes);
 app.use("/api/products", productsRoutes);
 app.use("/api/orders", ordersRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 
