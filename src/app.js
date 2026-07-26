@@ -548,6 +548,9 @@ export default function SadaarMarketplace() {
   const [homeError, setHomeError] = useState(null);
   const [returningPayment, setReturningPayment] = useState(null); // { status: 'checking'|'paid'|'error', orderId, total, message }
 
+  const [showDebugBanner, setShowDebugBanner] = useState(false);
+  const [debugBannerText, setDebugBannerText] = useState("");
+
   // Handle the return trip from Moyasar's 3D Secure redirect. Moyasar appends
   // ?id=<payment_id> to our callback_url after the bank's verification step,
   // and the page fully reloads at that point (wiping normal React state), so
@@ -555,9 +558,13 @@ export default function SadaarMarketplace() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const paymentId = params.get("id");
+    const pendingRaw = sessionStorage.getItem("sadaar_pending_order");
+
+    setDebugBannerText(`url: ${window.location.href}\nid param: ${paymentId || "(none)"}\nsessionStorage pending: ${pendingRaw || "(none)"}`);
+    setShowDebugBanner(true);
+
     if (!paymentId) return;
 
-    const pendingRaw = sessionStorage.getItem("sadaar_pending_order");
     window.history.replaceState({}, "", window.location.pathname); // clean the URL
 
     if (!pendingRaw) {
@@ -610,6 +617,13 @@ export default function SadaarMarketplace() {
   return (
     <div style={{ background: C.sand, minHeight: "100vh" }}>
       <style>{FONTS}</style>
+
+      {showDebugBanner && (
+        <div style={{ background: "#22331F", color: "#DCEAD8", padding: "10px 16px", fontFamily: "monospace", fontSize: 11, whiteSpace: "pre-wrap", position: "relative" }}>
+          {debugBannerText}
+          <button onClick={() => setShowDebugBanner(false)} style={{ position: "absolute", top: 8, right: 12, background: "none", border: "none", color: "#DCEAD8", cursor: "pointer" }}>✕</button>
+        </div>
+      )}
 
       {returningPayment && (
         <div style={{ maxWidth: 560, margin: "0 auto", padding: "80px 24px", textAlign: "center" }}>
