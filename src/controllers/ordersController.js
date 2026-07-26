@@ -87,9 +87,28 @@ async function placeOrder(req, res) {
 }
 
 async function getOrder(req, res) {
+  const { contact } = req.query;
+  if (!contact) {
+    return res.status(400).json({ error: "Provide the email or phone number used on the order." });
+  }
   try {
-    const orderRes = await pool.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
+    const orderRes = await pool.query(
+      `SELECT o.*, c.email AS customer_email, c.phone AS customer_phone
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.id = $1`,
+      [req.params.id]
+    );
     if (orderRes.rows.length === 0) return res.status(404).json({ error: "Order not found." });
+    const order = orderRes.rows[0];
+
+    const contactNormalized = contact.trim().toLowerCase();
+    const matches =
+      (order.customer_email && order.customer_email.toLowerCase() === contactNormalized) ||
+      (order.customer_phone && order.customer_phone.replace(/\s+/g, "") === contact.trim().replace(/\s+/g, ""));
+
+    if (!matches) {
+      return res.status(403).json({ error: "That email or phone doesn't match this order." });
+    }
 
     const itemsRes = await pool.query(
       `SELECT oi.*, p.name AS product_name, b.name AS brand_name
@@ -99,8 +118,10 @@ async function getOrder(req, res) {
        WHERE oi.order_id = $1`,
       [req.params.id]
     );
-    res.json({ ...orderRes.rows[0], items: itemsRes.rows });
+    const { customer_email, customer_phone, ...safeOrder } = order;
+    res.json({ ...safeOrder, items: itemsRes.rows });
   } catch (err) {
+    console.error("getOrder error:", err);
     res.status(500).json({ error: "Could not load order.", detail: err.message });
   }
 }
