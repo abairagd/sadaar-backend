@@ -66,4 +66,43 @@ async function platformStats(req, res) {
   }
 }
 
-module.exports = { listAllBrands, updateBrandStatus, platformStats };
+async function listPendingPayouts(req, res) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT b.id AS brand_id, b.name AS brand_name,
+             COUNT(oi.id)::int AS item_count,
+             COALESCE(SUM(oi.brand_payout), 0)::float AS amount_due
+      FROM order_items oi
+      JOIN brands b ON b.id = oi.brand_id
+      WHERE oi.payout_status = 'pending' AND oi.fulfillment_status IN ('shipped', 'delivered')
+      GROUP BY b.id, b.name
+      HAVING COALESCE(SUM(oi.brand_payout), 0) > 0
+      ORDER BY amount_due DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("listPendingPayouts error:", err);
+    res.status(500).json({ error: "Could not load pending payouts.", detail: err.message });
+  }
+}
+
+async function markBrandPayoutsPaid(req, res) {
+  const { reference } = req.body;
+  const brandId = req.params.brandId;
+  try {
+    const { rows } = await pool.query(
+      `UPDATE order_items
+       SET payout_status = 'paid', payout_date = now(), payout_reference = $1
+       WHERE brand_id = $2 AND payout_status = 'pending' AND fulfillment_status IN ('shipped', 'delivered')
+       RETURNING id, brand_payout`,
+      [reference || null, brandId]
+    );
+    const total = rows.reduce((s, r) => s + Number(r.brand_payout), 0);
+    res.json({ itemsMarked: rows.length, totalPaid: total });
+  } catch (err) {
+    console.error("markBrandPayoutsPaid error:", err);
+    res.status(500).json({ error: "Could not mark payouts as paid.", detail: err.message });
+  }
+}
+
+module.exports = { listAllBrands, updateBrandStatus, platformStats, listPendingPayouts, markBrandPayoutsPaid };
