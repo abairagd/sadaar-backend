@@ -1,22 +1,45 @@
 const pool = require("../db/pool");
+const { isValidEmail, cleanString, isNonNegativeInt } = require("../utils/validators");
 
-// Places an order across possibly several brands in one checkout.
-// body: { customer: {fullName, email, phone, city, address}, items: [{variantId, quantity}] }
-// For each line item this snapshots the brand's current commission_rate so historical
-// orders don't change if the brand's rate changes later, computes commission_amount and
-// brand_payout, and decrements stock. Everything happens in one transaction.
 async function placeOrder(req, res) {
   const { customer, items } = req.body;
   if (!customer || !customer.fullName || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "Customer details and at least one item are required." });
   }
+  if (items.length > 50) {
+    return res.status(400).json({ error: "Too many items in one order (max 50)." });
+  }
+  for (const item of items) {
+    if (!Number.isInteger(item.variantId) && !/^\d+$/.test(String(item.variantId))) {
+      return res.status(400).json({ error: "Invalid item in order." });
+    }
+    if (!isNonNegativeInt(item.quantity) || item.quantity < 1 || item.quantity > 20) {
+      return res.status(400).json({ error: "Quantity per item must be between 1 and 20." });
+    }
+  }
+
+  const fullName = cleanString(customer.fullName, 160);
+  const city = cleanString(customer.city, 80);
+  const address = cleanString(customer.address, 500);
+  const phone = cleanString(customer.phone, 30);
+  const email = customer.email ? customer.email.trim() : null;
+
+  if (!fullName || !city || !address) {
+    return res.status(400).json({ error: "Full name, city, and address are required." });
+  }
+  if (email && !isValidEmail(email)) {
+    return res.status(400).json({ error: "Enter a valid email, or leave it blank." });
+  }
+  customer.fullName = fullName;
+  customer.city = city;
+  customer.address = address;
+  customer.phone = phone;
+  customer.email = email;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Look up each variant with its product + brand commission rate, and lock the row
-    // (FOR UPDATE) so concurrent orders can't oversell the same stock.
     const lineItems = [];
     for (const item of items) {
       const { rows } = await client.query(
@@ -71,9 +94,6 @@ async function placeOrder(req, res) {
 
     await client.query("COMMIT");
 
-    // Order routing: in production this is where each brand gets notified
-    // (email/webhook/dashboard push) that they have a new item to fulfill.
-    // Left as a stub since no gateway/notification service is wired up yet.
     const distinctBrands = [...new Set(lineItems.map((li) => li.brand_id))];
     console.log(`Order #${orderId} routed to brand(s): ${distinctBrands.join(", ")}`);
 
@@ -126,7 +146,6 @@ async function getOrder(req, res) {
   }
 }
 
-// Brand dashboard: only the line items belonging to the logged-in brand (req.brandId).
 async function listBrandOrderItems(req, res) {
   try {
     const { rows } = await pool.query(
@@ -144,7 +163,6 @@ async function listBrandOrderItems(req, res) {
   }
 }
 
-// Brand marks their line item as shipped, with a tracking number.
 async function markShipped(req, res) {
   const { trackingNumber } = req.body;
   try {
