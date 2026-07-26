@@ -663,6 +663,7 @@ export default function SadaarMarketplace() {
           {view.type === "checkout" && <Checkout items={cart} setView={setView} clearCart={() => setCart([])} />}
 
           <Footer />
+            
         </>
       )}
     </div>
