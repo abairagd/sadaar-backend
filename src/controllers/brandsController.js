@@ -14,9 +14,10 @@ async function listBrands(req, res) {
     query += " ORDER BY name ASC";
     const { rows } = await pool.query(query, params);
     res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: "Could not load brands.", detail: err.message });
-  }
+ } catch (err) {
+     console.error("listBrands error:", err);
+     res.status(500).json({ error: "Could not load brands.", code: err.code, detail: err.message, hint: err.hint });
+   }
 }
 
 async function getBrand(req, res) {
