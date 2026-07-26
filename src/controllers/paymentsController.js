@@ -1,4 +1,30 @@
 const pool = require("../db/pool");
+const { sendEmail } = require("../utils/sendEmail");
+
+function money(n) {
+  return `SAR ${Number(n).toLocaleString()}`;
+}
+
+function buildOrderEmailHtml(order, items) {
+  const rows = items
+    .map(
+      (i) => `<tr>
+        <td style="padding:8px 0;">${i.product_name} (${i.brand_name})</td>
+        <td style="padding:8px 0;text-align:right;">${i.quantity} × ${money(i.unit_price)}</td>
+      </tr>`
+    )
+    .join("");
+  return `
+    <div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+      <h2 style="color:#16261C;">Thanks for your order, ${order.shipping_name}!</h2>
+      <p>Order #${order.id} has been confirmed and paid. Each brand below has been notified to prepare your item(s) for shipping.</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">${rows}</table>
+      <p style="font-weight:bold;">Total: ${money(order.total)}</p>
+      <p style="font-size:13px;color:#7A7566;">Shipping to: ${order.shipping_address}, ${order.shipping_city}</p>
+      <p style="font-size:13px;color:#7A7566;margin-top:24px;">— SADAAR, home of Saudi fashion</p>
+    </div>
+  `;
+}
 
 async function confirmPayment(req, res) {
   const { paymentId } = req.body;
@@ -36,6 +62,31 @@ async function confirmPayment(req, res) {
       `UPDATE orders SET payment_status = 'paid', payment_ref = $1, status = 'paid' WHERE id = $2`,
       [payment.id, orderId]
     );
+
+    try {
+      const customerRes = await pool.query(
+        `SELECT c.email FROM customers c WHERE c.id = $1`,
+        [order.customer_id]
+      );
+      const customerEmail = customerRes.rows[0]?.email;
+      if (customerEmail) {
+        const itemsRes = await pool.query(
+          `SELECT oi.quantity, oi.unit_price, p.name AS product_name, b.name AS brand_name
+           FROM order_items oi
+           JOIN products p ON p.id = oi.product_id
+           JOIN brands b ON b.id = oi.brand_id
+           WHERE oi.order_id = $1`,
+          [orderId]
+        );
+        await sendEmail({
+          to: customerEmail,
+          subject: `SADAAR order #${orderId} confirmed`,
+          html: buildOrderEmailHtml({ ...order, id: orderId }, itemsRes.rows),
+        });
+      }
+    } catch (emailErr) {
+      console.error("Order confirmation email failed:", emailErr);
+    }
 
     res.json({ orderId: Number(orderId), paymentStatus: "paid", paymentRef: payment.id });
   } catch (err) {
