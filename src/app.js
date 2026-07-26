@@ -7,8 +7,13 @@ const ordersRoutes = require("./routes/orders");
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+     origin: "*",
+     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+     allowedHeaders: ["Content-Type", "Authorization"],
+   }));
+   app.options("*", cors());
+   app.use(express.json());
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
