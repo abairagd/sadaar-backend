@@ -1,21 +1,25 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 
 const brandsRoutes = require("./routes/brands");
 const productsRoutes = require("./routes/products");
 const ordersRoutes = require("./routes/orders");
 const adminRoutes = require("./routes/admin");
 const configRoutes = require("./routes/config");
+const { generalLimiter } = require("./middleware/rateLimiters");
 
 const app = express();
 
+app.use(helmet());
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.options("*", cors());
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
+app.use(generalLimiter);
 
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
@@ -34,4 +38,3 @@ app.use((err, req, res, next) => {
 });
 
 module.exports = app;
-
