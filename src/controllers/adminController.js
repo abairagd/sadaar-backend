@@ -19,7 +19,7 @@ async function updateBrandStatus(req, res) {
   const { status } = req.body;
   if (!["active", "pending", "suspended"].includes(status)) {
     return res.status(400).json({ error: "Status must be active, pending, or suspended." });
-    }
+    
     async function updateBrandCommission(req, res) {
   const commissionRate = Number(req.body.commissionRate);
   if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100) {
