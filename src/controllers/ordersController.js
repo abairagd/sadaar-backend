@@ -1,6 +1,7 @@
 const pool = require("../db/pool");
 const { isValidEmail, cleanString, isNonNegativeInt } = require("../utils/validators");
 const { evaluateDiscount } = require("./discountsController");
+const { sendEmail } = require("../utils/sendEmail");
 
 async function placeOrder(req, res) {
   const { customer, items } = req.body;
@@ -44,7 +45,7 @@ async function placeOrder(req, res) {
     const lineItems = [];
     for (const item of items) {
       const { rows } = await client.query(
-        `SELECT v.id AS variant_id, v.stock_qty, p.id AS product_id, p.price, p.brand_id, b.commission_rate
+        `SELECT v.id AS variant_id, v.stock_qty, v.size, p.id AS product_id, p.name AS product_name, p.price, p.brand_id, b.commission_rate, b.name AS brand_name, b.contact_email AS brand_email
          FROM product_variants v
          JOIN products p ON p.id = v.product_id
          JOIN brands b ON b.id = p.brand_id
@@ -131,6 +132,39 @@ async function placeOrder(req, res) {
 
     const distinctBrands = [...new Set(lineItems.map((li) => li.brand_id))];
     console.log(`Order #${orderId} routed to brand(s): ${distinctBrands.join(", ")}`);
+
+    try {
+      const LOW_STOCK_THRESHOLD = 3;
+      const lowStockByBrand = {};
+      for (const li of lineItems) {
+        const newStock = li.stock_qty - li.quantity;
+        if (newStock <= LOW_STOCK_THRESHOLD) {
+          if (!lowStockByBrand[li.brand_id]) lowStockByBrand[li.brand_id] = { email: li.brand_email, brandName: li.brand_name, items: [] };
+          lowStockByBrand[li.brand_id].items.push({ productName: li.product_name, size: li.size, remaining: newStock });
+        }
+      }
+      for (const brandId of Object.keys(lowStockByBrand)) {
+        const { email, brandName, items } = lowStockByBrand[brandId];
+        if (!email) continue;
+        const rows = items.map((i) =>
+          `<tr><td style="padding:6px 0;">${i.productName} (${i.size})</td><td style="padding:6px 0;text-align:right;">${i.remaining} left</td></tr>`
+        ).join("");
+        await sendEmail({
+          to: email,
+          subject: `Low stock alert — ${items.length} item(s) running low on SADAAR`,
+          html: `
+            <div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+              <h2 style="color:#16261C;">Hi ${brandName},</h2>
+              <p>A recent order (#${orderId}) brought the following down to ${LOW_STOCK_THRESHOLD} units or fewer:</p>
+              <table style="width:100%;border-collapse:collapse;margin:16px 0;">${rows}</table>
+              <p style="font-size:13px;color:#7A7566;">Log into your SADAAR brand dashboard to restock or update these listings.</p>
+            </div>
+          `,
+        });
+      }
+    } catch (alertErr) {
+      console.error("Low-stock alert email failed:", alertErr);
+    }
 
     res.status(201).json({ orderId, subtotal, shippingFee, discountCode, discountAmount, total: finalTotal, status: "placed", paymentStatus: "unpaid" });
   } catch (err) {
