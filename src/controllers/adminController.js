@@ -122,5 +122,37 @@ async function markBrandPayoutsPaid(req, res) {
     res.status(500).json({ error: "Could not mark payouts as paid.", detail: err.message });
   }
 }
+async function listAllOrders(req, res) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT o.id, o.status, o.payment_status, o.subtotal, o.shipping_fee, o.discount_code, o.discount_amount, o.total,
+             o.shipping_name, o.shipping_city, o.created_at, c.email AS customer_email, c.phone AS customer_phone
+      FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+      ORDER BY o.created_at DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("listAllOrders error:", err);
+    res.status(500).json({ error: "Could not load orders.", detail: err.message });
+  }
+}
 
-module.exports = { listAllBrands, updateBrandStatus, updateBrandCommission, platformStats, listPendingPayouts, markBrandPayoutsPaid };
+async function listAllOrderItems(req, res) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT oi.id, oi.order_id, oi.quantity, oi.unit_price, oi.commission_rate, oi.commission_amount, oi.brand_payout,
+             oi.fulfillment_status, oi.tracking_number, oi.payout_status, oi.payout_date, oi.payout_reference,
+             b.name AS brand_name, p.name AS product_name, o.created_at AS order_created_at
+      FROM order_items oi
+      JOIN brands b ON b.id = oi.brand_id
+      JOIN products p ON p.id = oi.product_id
+      JOIN orders o ON o.id = oi.order_id
+      ORDER BY o.created_at DESC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("listAllOrderItems error:", err);
+    res.status(500).json({ error: "Could not load order items.", detail: err.message });
+  }
+}
+module.exports = { listAllBrands, updateBrandStatus, updateBrandCommission, platformStats, listPendingPayouts, markBrandPayoutsPaid, listAllOrders, listAllOrderItems };
