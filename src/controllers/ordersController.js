@@ -60,6 +60,18 @@ async function placeOrder(req, res) {
 
     const subtotal = lineItems.reduce((s, li) => s + Number(li.price) * li.quantity, 0);
 
+    const SHIPPING_FEE_PER_BRAND = 25;
+    const FREE_SHIPPING_THRESHOLD = 300;
+    const brandSubtotals = {};
+    for (const li of lineItems) {
+      brandSubtotals[li.brand_id] = (brandSubtotals[li.brand_id] || 0) + Number(li.price) * li.quantity;
+    }
+    const shippingFee = Object.values(brandSubtotals).reduce(
+      (s, brandSubtotal) => s + (brandSubtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE_PER_BRAND),
+      0
+    );
+    const total = Math.round((subtotal + shippingFee) * 100) / 100;
+
     const customerRes = await client.query(
       `INSERT INTO customers (full_name, email, phone) VALUES ($1,$2,$3)
        ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name RETURNING id`,
@@ -68,9 +80,9 @@ async function placeOrder(req, res) {
     const customerId = customerRes.rows[0].id;
 
     const orderRes = await client.query(
-      `INSERT INTO orders (customer_id, subtotal, total, shipping_name, shipping_phone, shipping_city, shipping_address, payment_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid') RETURNING id`,
-      [customerId, subtotal, subtotal, customer.fullName, customer.phone || null, customer.city || null, customer.address || null]
+      `INSERT INTO orders (customer_id, subtotal, shipping_fee, total, shipping_name, shipping_phone, shipping_city, shipping_address, payment_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'unpaid') RETURNING id`,
+      [customerId, subtotal, shippingFee, total, customer.fullName, customer.phone || null, customer.city || null, customer.address || null]
     );
     const orderId = orderRes.rows[0].id;
 
@@ -97,7 +109,7 @@ async function placeOrder(req, res) {
     const distinctBrands = [...new Set(lineItems.map((li) => li.brand_id))];
     console.log(`Order #${orderId} routed to brand(s): ${distinctBrands.join(", ")}`);
 
-    res.status(201).json({ orderId, subtotal, total: subtotal, status: "placed", paymentStatus: "unpaid" });
+    res.status(201).json({ orderId, subtotal, shippingFee, total, status: "placed", paymentStatus: "unpaid" });
   } catch (err) {
     await client.query("ROLLBACK");
     res.status(400).json({ error: "Could not place order.", detail: err.message });
