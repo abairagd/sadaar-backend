@@ -32,14 +32,15 @@ async function uploadProductImage(req, res) {
     const ext = req.file.mimetype === "image/png" ? "png" : req.file.mimetype === "image/webp" ? "webp" : "jpg";
     const path = `${req.brandId}/${productId}/${Date.now()}.${ext}`;
 
-    const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-        "Content-Type": req.file.mimetype,
-      },
-      body: req.file.buffer,
-    });
+const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+    apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    "Content-Type": req.file.mimetype,
+  },
+  body: req.file.buffer,
+});
 
     if (!uploadRes.ok) {
       const detail = await uploadRes.text();
