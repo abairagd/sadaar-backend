@@ -1,5 +1,6 @@
 const pool = require("../db/pool");
 const { isValidEmail, cleanString, isNonNegativeInt } = require("../utils/validators");
+const { evaluateDiscount } = require("./discountsController");
 
 async function placeOrder(req, res) {
   const { customer, items } = req.body;
@@ -72,6 +73,28 @@ async function placeOrder(req, res) {
     );
     const total = Math.round((subtotal + shippingFee) * 100) / 100;
 
+    let discountCode = null;
+    let discountAmount = 0;
+    if (req.body.discountCode) {
+      const codeNormalized = String(req.body.discountCode).trim().toUpperCase();
+      const discountRes = await client.query(
+        "SELECT * FROM discount_codes WHERE UPPER(code) = $1 FOR UPDATE",
+        [codeNormalized]
+      );
+      if (discountRes.rows.length === 0) {
+        throw new Error("That discount code doesn't exist.");
+      }
+      const evaluation = evaluateDiscount(discountRes.rows[0], subtotal);
+      if (!evaluation.valid) {
+        throw new Error(evaluation.error);
+      }
+      discountCode = codeNormalized;
+      discountAmount = evaluation.amount;
+      await client.query("UPDATE discount_codes SET uses_count = uses_count + 1 WHERE id = $1", [discountRes.rows[0].id]);
+    }
+
+    const finalTotal = Math.round((total - discountAmount) * 100) / 100;
+
     const customerRes = await client.query(
       `INSERT INTO customers (full_name, email, phone) VALUES ($1,$2,$3)
        ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name RETURNING id`,
@@ -80,9 +103,9 @@ async function placeOrder(req, res) {
     const customerId = customerRes.rows[0].id;
 
     const orderRes = await client.query(
-      `INSERT INTO orders (customer_id, subtotal, shipping_fee, total, shipping_name, shipping_phone, shipping_city, shipping_address, payment_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'unpaid') RETURNING id`,
-      [customerId, subtotal, shippingFee, total, customer.fullName, customer.phone || null, customer.city || null, customer.address || null]
+      `INSERT INTO orders (customer_id, subtotal, shipping_fee, discount_code, discount_amount, total, shipping_name, shipping_phone, shipping_city, shipping_address, payment_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'unpaid') RETURNING id`,
+      [customerId, subtotal, shippingFee, discountCode, discountAmount, finalTotal, customer.fullName, customer.phone || null, customer.city || null, customer.address || null]
     );
     const orderId = orderRes.rows[0].id;
 
@@ -109,7 +132,7 @@ async function placeOrder(req, res) {
     const distinctBrands = [...new Set(lineItems.map((li) => li.brand_id))];
     console.log(`Order #${orderId} routed to brand(s): ${distinctBrands.join(", ")}`);
 
-    res.status(201).json({ orderId, subtotal, shippingFee, total, status: "placed", paymentStatus: "unpaid" });
+    res.status(201).json({ orderId, subtotal, shippingFee, discountCode, discountAmount, total: finalTotal, status: "placed", paymentStatus: "unpaid" });
   } catch (err) {
     await client.query("ROLLBACK");
     res.status(400).json({ error: "Could not place order.", detail: err.message });
