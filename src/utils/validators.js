@@ -1,5 +1,5 @@
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const ALLOWED_CATEGORIES = ["Contemporary", "Abayas", "Streetwear", "Accessories", "Footwear"];
+const ALLOWED_CATEGORIES = ["Men", "Women", "Accessories", "Shoes"];
 
 function isValidEmail(email) {
   return typeof email === "string" && EMAIL_RE.test(email.trim()) && email.length <= 160;
