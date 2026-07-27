@@ -32,17 +32,17 @@ async function uploadProductImage(req, res) {
     const ext = req.file.mimetype === "image/png" ? "png" : req.file.mimetype === "image/webp" ? "webp" : "jpg";
     const path = `${req.brandId}/${productId}/${Date.now()}.${ext}`;
 
-const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}`, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-    apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-    "Content-Type": req.file.mimetype,
-  },
-  body: req.file.buffer,
-});
+    const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": req.file.mimetype,
+      },
+      body: req.file.buffer,
+    });
 
-if (!uploadRes.ok) {
+    if (!uploadRes.ok) {
       let detail = await uploadRes.text();
       if (!detail) detail = "(empty response body)";
       console.error(`Supabase Storage upload failed: status ${uploadRes.status}, body: ${detail}`);
@@ -85,4 +85,45 @@ async function deleteProductImage(req, res) {
   }
 }
 
-module.exports = { uploadProductImage, deleteProductImage };
+async function reorderProductImages(req, res) {
+  const productId = req.params.id;
+  const { imageIds } = req.body;
+
+  if (!Array.isArray(imageIds) || imageIds.length === 0) {
+    return res.status(400).json({ error: "imageIds must be a non-empty array." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const productRes = await client.query("SELECT id FROM products WHERE id = $1 AND brand_id = $2", [productId, req.brandId]);
+    if (productRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Product not found for this brand." });
+    }
+
+    const existingRes = await client.query("SELECT id FROM product_images WHERE product_id = $1", [productId]);
+    const existingIds = new Set(existingRes.rows.map((r) => r.id));
+    const allBelong = imageIds.every((id) => existingIds.has(id)) && imageIds.length === existingIds.size;
+    if (!allBelong) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "imageIds must exactly match this product's existing images." });
+    }
+
+    for (let i = 0; i < imageIds.length; i++) {
+      await client.query("UPDATE product_images SET sort_order = $1 WHERE id = $2", [i, imageIds[i]]);
+    }
+
+    await client.query("COMMIT");
+    res.json({ success: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("reorderProductImages error:", err);
+    res.status(500).json({ error: "Could not reorder images.", detail: err.message });
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { uploadProductImage, deleteProductImage, reorderProductImages };
