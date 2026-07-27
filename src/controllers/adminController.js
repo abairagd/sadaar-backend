@@ -19,8 +19,21 @@ async function updateBrandStatus(req, res) {
   const { status } = req.body;
   if (!["active", "pending", "suspended"].includes(status)) {
     return res.status(400).json({ error: "Status must be active, pending, or suspended." });
-    
-    async function updateBrandCommission(req, res) {
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE brands SET status = $1 WHERE id = $2 RETURNING id, name, status`,
+      [status, req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("updateBrandStatus error:", err);
+    res.status(500).json({ error: "Could not update brand status.", detail: err.message });
+  }
+}
+
+async function updateBrandCommission(req, res) {
   const commissionRate = Number(req.body.commissionRate);
   if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate > 100) {
     return res.status(400).json({ error: "Commission rate must be a number between 0 and 100." });
@@ -35,31 +48,6 @@ async function updateBrandStatus(req, res) {
   } catch (err) {
     console.error("updateBrandCommission error:", err);
     res.status(500).json({ error: "Could not update commission rate.", detail: err.message });
-  }
-}
-  try {
-    const { rows } = await pool.query(
-      `UPDATE brands SET commission_rate = $1 WHERE id = $2 RETURNING id, name, commission_rate`,
-      [commissionRate, req.params.id]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("updateBrandCommission error:", err);
-    res.status(500).json({ error: "Could not update commission rate.", detail: err.message });
-  }
-}
-  }
-  try {
-    const { rows } = await pool.query(
-      `UPDATE brands SET status = $1 WHERE id = $2 RETURNING id, name, status`,
-      [status, req.params.id]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
-    res.json(rows[0]);
-  } catch (err) {
-    console.error("updateBrandStatus error:", err);
-    res.status(500).json({ error: "Could not update brand status.", detail: err.message });
   }
 }
 
