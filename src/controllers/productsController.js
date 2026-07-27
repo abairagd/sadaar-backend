@@ -7,7 +7,8 @@ async function listProducts(req, res) {
     const params = [];
     let query = `
       SELECT p.id, p.name, p.description, p.category, p.price, p.created_at,
-             b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug
+             b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug,
+             (SELECT url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order ASC LIMIT 1) AS image_url
       FROM products p
       JOIN brands b ON b.id = p.brand_id
       WHERE p.status = 'active' AND b.status = 'active'
@@ -45,7 +46,11 @@ async function getProduct(req, res) {
       "SELECT id, size, stock_qty FROM product_variants WHERE product_id = $1 ORDER BY id ASC",
       [req.params.id]
     );
-    res.json({ ...productRes.rows[0], variants: variantsRes.rows });
+    const imagesRes = await pool.query(
+      "SELECT id, url, sort_order FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC",
+      [req.params.id]
+    );
+    res.json({ ...productRes.rows[0], variants: variantsRes.rows, images: imagesRes.rows });
   } catch (err) {
     res.status(500).json({ error: "Could not load product.", detail: err.message });
   }
