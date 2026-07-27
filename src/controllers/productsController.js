@@ -126,4 +126,40 @@ async function createProduct(req, res) {
   }
 }
 
-module.exports = { listProducts, getProduct, createProduct };
+async function updateVariantStock(req, res) {
+  const stockQty = Number(req.body.stockQty);
+  if (!isNonNegativeInt(stockQty)) {
+    return res.status(400).json({ error: "Stock quantity must be a non-negative whole number." });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE product_variants v
+       SET stock_qty = $1
+       FROM products p
+       WHERE v.id = $2 AND v.product_id = p.id AND p.id = $3 AND p.brand_id = $4
+       RETURNING v.id, v.stock_qty`,
+      [stockQty, req.params.variantId, req.params.id, req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Variant not found for this brand's product." });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("updateVariantStock error:", err);
+    res.status(500).json({ error: "Could not update stock.", detail: err.message });
+  }
+}
+
+async function archiveProduct(req, res) {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE products SET status = 'archived' WHERE id = $1 AND brand_id = $2 RETURNING id`,
+      [req.params.id, req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Product not found for this brand." });
+    res.json({ id: rows[0].id, status: "archived" });
+  } catch (err) {
+    console.error("archiveProduct error:", err);
+    res.status(500).json({ error: "Could not remove product.", detail: err.message });
+  }
+}
+
+module.exports = { listProducts, getProduct, createProduct, updateVariantStock, archiveProduct };
