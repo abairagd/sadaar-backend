@@ -167,4 +167,35 @@ async function archiveProduct(req, res) {
   }
 }
 
-module.exports = { listProducts, getProduct, createProduct, updateVariantStock, archiveProduct };
+async function updateProduct(req, res) {
+  const name = cleanString(req.body.name, 160);
+  const description = cleanString(req.body.description, 4000);
+  const category = req.body.category;
+  const subcategory = cleanString(req.body.subcategory, 60);
+  const productType = cleanString(req.body.productType, 60);
+  const price = req.body.price;
+
+  if (!name || !category || !isPositiveNumber(price)) {
+    return res.status(400).json({ error: "Name, category, and a positive price are required." });
+  }
+  if (!isValidCategory(category)) {
+    return res.status(400).json({ error: "Choose a valid category." });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE products
+       SET name = $1, description = $2, category = $3, subcategory = $4, product_type = $5, price = $6
+       WHERE id = $7 AND brand_id = $8
+       RETURNING id`,
+      [name, description || null, category, subcategory || null, productType || null, price, req.params.id, req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Product not found for this brand." });
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    console.error("updateProduct error:", err);
+    res.status(500).json({ error: "Could not update product.", detail: err.message });
+  }
+}
+
+module.exports = { listProducts, getProduct, createProduct, updateProduct, updateVariantStock, archiveProduct };
