@@ -9,6 +9,9 @@ const adminRoutes = require("./routes/admin");
 const configRoutes = require("./routes/config");
 const discountsRoutes = require("./routes/discounts");
 const { generalLimiter } = require("./middleware/rateLimiters");
+const supportRoutes = require("./routes/support");
+// ...
+app.use("/api/support", supportRoutes);
 
 const app = express();
 
