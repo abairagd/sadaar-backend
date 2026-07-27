@@ -7,6 +7,7 @@ const productsRoutes = require("./routes/products");
 const ordersRoutes = require("./routes/orders");
 const adminRoutes = require("./routes/admin");
 const configRoutes = require("./routes/config");
+const discountsRoutes = require("./routes/discounts");
 const { generalLimiter } = require("./middleware/rateLimiters");
 
 const app = express();
@@ -28,6 +29,7 @@ app.use("/api/products", productsRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/config", configRoutes);
+app.use("/api/discounts", discountsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 
