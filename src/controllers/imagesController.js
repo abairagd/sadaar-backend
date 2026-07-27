@@ -42,10 +42,11 @@ const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}
   body: req.file.buffer,
 });
 
-    if (!uploadRes.ok) {
-      const detail = await uploadRes.text();
-      console.error("Supabase Storage upload failed:", detail);
-      return res.status(500).json({ error: "Could not upload image.", detail });
+if (!uploadRes.ok) {
+      let detail = await uploadRes.text();
+      if (!detail) detail = "(empty response body)";
+      console.error(`Supabase Storage upload failed: status ${uploadRes.status}, body: ${detail}`);
+      return res.status(500).json({ error: "Could not upload image.", status: uploadRes.status, detail });
     }
 
     const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
@@ -64,7 +65,7 @@ const uploadRes = await fetch(`${supabaseStorageBase()}/object/${BUCKET}/${path}
     res.status(201).json(rows[0]);
   } catch (err) {
     console.error("uploadProductImage error:", err);
-    res.status(500).json({ error: "Could not upload image.", detail: err.message });
+    res.status(500).json({ error: "Could not upload image.", detail: err.message || err.toString() || "(unknown error)" });
   }
 }
 
