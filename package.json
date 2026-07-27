@@ -1,15 +1,13 @@
 {
   "name": "sadaar-backend",
   "version": "1.0.0",
-  "description": "SADAAR marketplace API — brands, products, orders, commission routing",
+  "description": "SADAAR marketplace API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "migrate": "node -e \"require('fs').readFileSync('src/db/schema.sql','utf8')\" && psql \"$DATABASE_URL\" -f src/db/schema.sql",
-    "seed": "psql \"$DATABASE_URL\" -f src/db/seed.sql"
+    "dev": "nodemon src/server.js"
   },
-"dependencies": {
+  "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
