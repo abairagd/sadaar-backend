@@ -2,7 +2,7 @@ const pool = require("../db/pool");
 const { isValidCategory, cleanString, isPositiveNumber, isNonNegativeInt } = require("../utils/validators");
 
 async function listProducts(req, res) {
-  const { category, brandId, sort } = req.query;
+  const { category, brandId, sort, minPrice, maxPrice, search } = req.query;
   try {
     const params = [];
     let query = `
@@ -21,8 +21,21 @@ async function listProducts(req, res) {
       params.push(brandId);
       query += ` AND p.brand_id = $${params.length}`;
     }
+    if (minPrice && !isNaN(Number(minPrice))) {
+      params.push(Number(minPrice));
+      query += ` AND p.price >= $${params.length}`;
+    }
+    if (maxPrice && !isNaN(Number(maxPrice))) {
+      params.push(Number(maxPrice));
+      query += ` AND p.price <= $${params.length}`;
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` AND p.name ILIKE $${params.length}`;
+    }
     if (sort === "price-asc") query += " ORDER BY p.price ASC";
     else if (sort === "price-desc") query += " ORDER BY p.price DESC";
+    else if (sort === "name-asc") query += " ORDER BY p.name ASC";
     else query += " ORDER BY p.created_at DESC";
 
     const { rows } = await pool.query(query, params);
