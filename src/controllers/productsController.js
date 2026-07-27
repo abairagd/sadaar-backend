@@ -2,11 +2,11 @@ const pool = require("../db/pool");
 const { isValidCategory, cleanString, isPositiveNumber, isNonNegativeInt } = require("../utils/validators");
 
 async function listProducts(req, res) {
-  const { category, subcategory, brandId, sort, minPrice, maxPrice, search } = req.query;
+  const { category, subcategory, productType, brandId, sort, minPrice, maxPrice, search } = req.query;
   try {
     const params = [];
     let query = `
-      SELECT p.id, p.name, p.description, p.category, p.subcategory, p.price, p.created_at,
+      SELECT p.id, p.name, p.description, p.category, p.subcategory, p.product_type, p.price, p.created_at,
              b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug,
              (SELECT url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order ASC LIMIT 1) AS image_url
       FROM products p
@@ -20,6 +20,10 @@ async function listProducts(req, res) {
     if (subcategory) {
       params.push(subcategory);
       query += ` AND p.subcategory = $${params.length}`;
+    }
+    if (productType) {
+      params.push(productType);
+      query += ` AND p.product_type = $${params.length}`;
     }
     if (brandId) {
       params.push(brandId);
@@ -78,6 +82,7 @@ async function createProduct(req, res) {
   const description = cleanString(req.body.description, 4000);
   const category = req.body.category;
   const subcategory = cleanString(req.body.subcategory, 60);
+  const productType = cleanString(req.body.productType, 60);
   const price = req.body.price;
   const sizes = req.body.sizes;
 
@@ -102,9 +107,9 @@ async function createProduct(req, res) {
   try {
     await client.query("BEGIN");
     const productRes = await client.query(
-      `INSERT INTO products (brand_id, name, description, category, subcategory, price)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [req.brandId, name, description || null, category, subcategory || null, price]
+      `INSERT INTO products (brand_id, name, description, category, subcategory, product_type, price)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [req.brandId, name, description || null, category, subcategory || null, productType || null, price]
     );
     const productId = productRes.rows[0].id;
 
