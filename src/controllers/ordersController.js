@@ -3,6 +3,11 @@ const { isValidEmail, cleanString, isNonNegativeInt } = require("../utils/valida
 const { evaluateDiscount } = require("./discountsController");
 const { sendEmail } = require("../utils/sendEmail");
 
+// Places an order across possibly several brands in one checkout.
+// body: { customer: {fullName, email, phone, city, address}, items: [{variantId, quantity}] }
+// For each line item this snapshots the brand's current commission_rate so historical
+// orders don't change if the brand's rate changes later, computes commission_amount and
+// brand_payout, and decrements stock. Everything happens in one transaction.
 async function placeOrder(req, res) {
   const { customer, items } = req.body;
   if (!customer || !customer.fullName || !Array.isArray(items) || items.length === 0) {
@@ -42,6 +47,8 @@ async function placeOrder(req, res) {
   try {
     await client.query("BEGIN");
 
+    // Look up each variant with its product + brand commission rate, and lock the row
+    // (FOR UPDATE) so concurrent orders can't oversell the same stock.
     const lineItems = [];
     for (const item of items) {
       const { rows } = await client.query(
@@ -62,6 +69,9 @@ async function placeOrder(req, res) {
 
     const subtotal = lineItems.reduce((s, li) => s + Number(li.price) * li.quantity, 0);
 
+    // Shipping is charged per brand shipment, since each brand fulfills and ships
+    // independently — waived if that brand's own subtotal in this order clears
+    // the free-shipping threshold.
     const SHIPPING_FEE_PER_BRAND = 25;
     const FREE_SHIPPING_THRESHOLD = 300;
     const brandSubtotals = {};
@@ -74,6 +84,9 @@ async function placeOrder(req, res) {
     );
     const total = Math.round((subtotal + shippingFee) * 100) / 100;
 
+    // Re-validate the discount code server-side inside this same transaction —
+    // never trust a discount amount sent from the browser. Lock the row so
+    // concurrent orders can't both squeeze past a max_uses limit.
     let discountCode = null;
     let discountAmount = 0;
     if (req.body.discountCode) {
@@ -130,9 +143,15 @@ async function placeOrder(req, res) {
 
     await client.query("COMMIT");
 
+    // Order routing: in production this is where each brand gets notified
+    // (email/webhook/dashboard push) that they have a new item to fulfill.
+    // Left as a stub since no gateway/notification service is wired up yet.
     const distinctBrands = [...new Set(lineItems.map((li) => li.brand_id))];
     console.log(`Order #${orderId} routed to brand(s): ${distinctBrands.join(", ")}`);
 
+    // Low-stock alerts — if this order pushed a variant at or below the threshold,
+    // email that brand so they can restock. Never let an email hiccup affect the
+    // order itself, so this runs after commit and is fully wrapped in try/catch.
     try {
       const LOW_STOCK_THRESHOLD = 3;
       const lowStockByBrand = {};
@@ -175,6 +194,9 @@ async function placeOrder(req, res) {
   }
 }
 
+// Requires the customer to confirm their email or phone matches the order,
+// so order details (name, address, items) can't be viewed by guessing an order
+// number alone. This same endpoint powers the public "track your order" page.
 async function getOrder(req, res) {
   const { contact } = req.query;
   if (!contact) {
@@ -215,6 +237,7 @@ async function getOrder(req, res) {
   }
 }
 
+// Brand dashboard: only the line items belonging to the logged-in brand (req.brandId).
 async function listBrandOrderItems(req, res) {
   try {
     const { rows } = await pool.query(
@@ -232,6 +255,7 @@ async function listBrandOrderItems(req, res) {
   }
 }
 
+// Brand marks their line item as shipped, with a tracking number.
 async function markShipped(req, res) {
   const { trackingNumber } = req.body;
   try {
@@ -247,4 +271,150 @@ async function markShipped(req, res) {
   }
 }
 
-module.exports = { placeOrder, getOrder, listBrandOrderItems, markShipped };
+// Customer requests cancellation of a single line item (not the whole order,
+// since each brand fulfills independently). Requires the same email/phone
+// verification as order lookup — the item must still be pending (not
+// shipped) and belong to a paid order.
+async function requestCancellation(req, res) {
+  const { contact } = req.body;
+  if (!contact) {
+    return res.status(400).json({ error: "Provide the email or phone used on the order." });
+  }
+  try {
+    const itemRes = await pool.query(
+      `SELECT oi.*, o.payment_status, c.email AS customer_email, c.phone AS customer_phone
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE oi.id = $1 AND oi.order_id = $2`,
+      [req.params.itemId, req.params.id]
+    );
+    if (itemRes.rows.length === 0) return res.status(404).json({ error: "Order item not found." });
+    const item = itemRes.rows[0];
+
+    const contactNormalized = contact.trim().toLowerCase();
+    const matches =
+      (item.customer_email && item.customer_email.toLowerCase() === contactNormalized) ||
+      (item.customer_phone && item.customer_phone.replace(/\s+/g, "") === contact.trim().replace(/\s+/g, ""));
+    if (!matches) {
+      return res.status(403).json({ error: "That email or phone doesn't match this order." });
+    }
+
+    if (item.payment_status !== "paid") {
+      return res.status(400).json({ error: "This order hasn't been paid yet." });
+    }
+    if (item.fulfillment_status !== "pending") {
+      return res.status(400).json({ error: "This item has already shipped and can no longer be cancelled here — contact support instead." });
+    }
+    if (item.cancellation_status !== "none") {
+      return res.status(400).json({ error: `A cancellation request already exists for this item (${item.cancellation_status}).` });
+    }
+
+    await pool.query("UPDATE order_items SET cancellation_status = 'requested' WHERE id = $1", [req.params.itemId]);
+    res.json({ id: item.id, cancellationStatus: "requested" });
+  } catch (err) {
+    console.error("requestCancellation error:", err);
+    res.status(500).json({ error: "Could not request cancellation.", detail: err.message });
+  }
+}
+
+// Brand approves or denies a cancellation request. On approval: calls
+// Moyasar's real refund API for that line item's value, restocks the
+// variant, and emails the customer. Never affects other items in the same
+// order — each brand's items are refunded/restocked independently.
+async function respondToCancellation(req, res) {
+  const { action } = req.body; // 'approve' | 'deny'
+  if (!["approve", "deny"].includes(action)) {
+    return res.status(400).json({ error: "action must be 'approve' or 'deny'." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const itemRes = await client.query(
+      `SELECT oi.*, o.payment_ref, o.id AS order_id, p.name AS product_name,
+              c.email AS customer_email, c.full_name AS customer_name
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE`,
+      [req.params.itemId, req.brandId]
+    );
+    if (itemRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Order item not found for this brand." });
+    }
+    const item = itemRes.rows[0];
+
+    if (item.cancellation_status !== "requested") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `No pending cancellation request on this item (status: ${item.cancellation_status}).` });
+    }
+
+    if (action === "deny") {
+      await client.query("UPDATE order_items SET cancellation_status = 'denied' WHERE id = $1", [item.id]);
+      await client.query("COMMIT");
+      return res.json({ id: item.id, cancellationStatus: "denied" });
+    }
+
+    // Approve: real refund via Moyasar for this line item's value.
+    if (!process.env.MOYASAR_SECRET_KEY) {
+      await client.query("ROLLBACK");
+      return res.status(500).json({ error: "Payment gateway isn't configured yet." });
+    }
+    if (!item.payment_ref) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "No payment reference on this order — cannot process a refund." });
+    }
+
+    const refundHalalas = Math.round(Number(item.unit_price) * item.quantity * 100);
+    const moyasarRes = await fetch(`https://api.moyasar.com/v1/payments/${item.payment_ref}/refund`, {
+      method: "POST",
+      headers: {
+        Authorization: "Basic " + Buffer.from(`${process.env.MOYASAR_SECRET_KEY}:`).toString("base64"),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ amount: refundHalalas }),
+    });
+    const refundData = await moyasarRes.json();
+    if (!moyasarRes.ok) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Moyasar refund failed.", detail: refundData.message || refundData });
+    }
+
+    await client.query("UPDATE order_items SET cancellation_status = 'refunded' WHERE id = $1", [item.id]);
+    await client.query("UPDATE product_variants SET stock_qty = stock_qty + $1 WHERE id = $2", [item.quantity, item.variant_id]);
+
+    await client.query("COMMIT");
+
+    try {
+      if (item.customer_email) {
+        await sendEmail({
+          to: item.customer_email,
+          subject: `Refund processed for order #${item.order_id}`,
+          html: `
+            <div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+              <h2 style="color:#14282E;">Hi ${item.customer_name || "there"},</h2>
+              <p>Your cancellation for <strong>${item.product_name}</strong> (order #${item.order_id}) has been approved and refunded.</p>
+              <p>SAR ${Number(item.unit_price * item.quantity).toFixed(2)} will be returned to your original payment method — this can take a few business days to appear, depending on your bank.</p>
+            </div>
+          `,
+        });
+      }
+    } catch (emailErr) {
+      console.error("Refund confirmation email failed:", emailErr);
+    }
+
+    res.json({ id: item.id, cancellationStatus: "refunded" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("respondToCancellation error:", err);
+    res.status(500).json({ error: "Could not process cancellation.", detail: err.message });
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { placeOrder, getOrder, listBrandOrderItems, markShipped, requestCancellation, respondToCancellation };
