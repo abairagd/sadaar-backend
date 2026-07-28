@@ -26,13 +26,58 @@ async function listBrands(req, res) {
 async function getBrand(req, res) {
   try {
     const { rows } = await pool.query(
-      "SELECT id, name, slug, description, category, created_at FROM brands WHERE slug = $1 AND status = 'active'",
+      `SELECT id, name, slug, description, category, created_at,
+              founder_story, brand_philosophy, origin_city,
+              instagram_url, tiktok_url, snapchat_url, x_url, whatsapp_url, website_url
+       FROM brands WHERE slug = $1 AND status = 'active'`,
       [req.params.slug]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
-    res.json(rows[0]);
+    const brand = rows[0];
+
+    const signatureRes = await pool.query(
+      `SELECT p.id, p.name, p.category, p.subcategory, p.price,
+              (SELECT url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order ASC LIMIT 1) AS image_url
+       FROM products p
+       WHERE p.brand_id = $1 AND p.is_signature = true AND p.status = 'active'
+       ORDER BY p.created_at DESC`,
+      [brand.id]
+    );
+
+    res.json({ ...brand, signatureProducts: signatureRes.rows });
   } catch (err) {
     res.status(500).json({ error: "Could not load brand.", detail: err.message });
+  }
+}
+
+// Brand edits their own profile — founder story, philosophy, origin city, social links.
+async function updateMyBrandProfile(req, res) {
+  const founderStory = cleanString(req.body.founderStory, 4000);
+  const brandPhilosophy = cleanString(req.body.brandPhilosophy, 4000);
+  const originCity = cleanString(req.body.originCity, 100);
+  const instagramUrl = cleanString(req.body.instagramUrl, 255);
+  const tiktokUrl = cleanString(req.body.tiktokUrl, 255);
+  const snapchatUrl = cleanString(req.body.snapchatUrl, 255);
+  const xUrl = cleanString(req.body.xUrl, 255);
+  const whatsappUrl = cleanString(req.body.whatsappUrl, 255);
+  const websiteUrl = cleanString(req.body.websiteUrl, 255);
+
+  try {
+    const { rows } = await pool.query(
+      `UPDATE brands
+       SET founder_story = $1, brand_philosophy = $2, origin_city = $3,
+           instagram_url = $4, tiktok_url = $5, snapchat_url = $6, x_url = $7, whatsapp_url = $8, website_url = $9
+       WHERE id = $10
+       RETURNING id`,
+      [founderStory || null, brandPhilosophy || null, originCity || null,
+       instagramUrl || null, tiktokUrl || null, snapchatUrl || null, xUrl || null, whatsappUrl || null, websiteUrl || null,
+       req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    console.error("updateMyBrandProfile error:", err);
+    res.status(500).json({ error: "Could not update profile.", detail: err.message });
   }
 }
 
@@ -164,4 +209,21 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { listBrands, getBrand, applyBrand, loginBrand, requestPasswordReset, resetPassword };
+// Brand fetches their own full profile (including fields not exposed on the
+// public getBrand endpoint) to pre-fill their profile edit form.
+async function getMyBrandProfile(req, res) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, slug, description, category, founder_story, brand_philosophy, origin_city,
+              instagram_url, tiktok_url, snapchat_url, x_url, whatsapp_url, website_url
+       FROM brands WHERE id = $1`,
+      [req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: "Could not load profile.", detail: err.message });
+  }
+}
+
+module.exports = { listBrands, getBrand, applyBrand, loginBrand, requestPasswordReset, resetPassword, getMyBrandProfile, updateMyBrandProfile };
