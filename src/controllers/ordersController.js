@@ -430,4 +430,190 @@ async function respondToCancellation(req, res) {
   }
 }
 
-module.exports = { placeOrder, getOrder, listBrandOrderItems, markShipped, requestCancellation, respondToCancellation };
+const RETURN_WINDOW_DAYS = 14;
+
+// Customer requests a return (refund) or exchange (different size) for an
+// item that's already shipped/delivered — the pre-shipment cancellation flow
+// doesn't apply anymore once it's out the door. Same contact verification as
+// order lookup and cancellation.
+async function requestReturn(req, res) {
+  const { contact, returnType, reason, exchangeVariantId } = req.body;
+  if (!contact) return res.status(400).json({ error: "Provide the email or phone used on the order." });
+  if (!["return", "exchange"].includes(returnType)) return res.status(400).json({ error: "returnType must be 'return' or 'exchange'." });
+  if (returnType === "exchange" && !exchangeVariantId) return res.status(400).json({ error: "Choose the size you'd like instead." });
+
+  try {
+    const itemRes = await pool.query(
+      `SELECT oi.*, o.payment_status, c.email AS customer_email, c.phone AS customer_phone
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE oi.id = $1 AND oi.order_id = $2`,
+      [req.params.itemId, req.params.id]
+    );
+    if (itemRes.rows.length === 0) return res.status(404).json({ error: "Order item not found." });
+    const item = itemRes.rows[0];
+
+    const contactNormalized = contact.trim().toLowerCase();
+    const matches =
+      (item.customer_email && item.customer_email.toLowerCase() === contactNormalized) ||
+      (item.customer_phone && item.customer_phone.replace(/\s+/g, "") === contact.trim().replace(/\s+/g, ""));
+    if (!matches) return res.status(403).json({ error: "That email or phone doesn't match this order." });
+
+    if (!["shipped", "delivered"].includes(item.fulfillment_status)) {
+      return res.status(400).json({ error: "This item hasn't shipped yet — use the cancellation option instead." });
+    }
+    if (item.return_status !== "none") {
+      return res.status(400).json({ error: `A return/exchange request already exists for this item (${item.return_status}).` });
+    }
+    if (item.shipped_at) {
+      const daysSinceShipped = (Date.now() - new Date(item.shipped_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceShipped > RETURN_WINDOW_DAYS) {
+        return res.status(400).json({ error: `The return window (${RETURN_WINDOW_DAYS} days from shipping) has passed for this item.` });
+      }
+    }
+
+    if (returnType === "exchange") {
+      const variantCheck = await pool.query("SELECT id FROM product_variants WHERE id = $1 AND product_id = $2", [exchangeVariantId, item.product_id]);
+      if (variantCheck.rows.length === 0) return res.status(400).json({ error: "That size isn't available for this product." });
+    }
+
+    await pool.query(
+      "UPDATE order_items SET return_status = 'requested', return_type = $1, return_reason = $2, exchange_variant_id = $3 WHERE id = $4",
+      [returnType, cleanString(reason, 1000) || null, returnType === "exchange" ? exchangeVariantId : null, item.id]
+    );
+    res.json({ id: item.id, returnStatus: "requested" });
+  } catch (err) {
+    console.error("requestReturn error:", err);
+    res.status(500).json({ error: "Could not request a return.", detail: err.message });
+  }
+}
+
+// Brand approves ("yes, ship it back to us") or denies the initial request.
+async function respondToReturn(req, res) {
+  const { action } = req.body; // 'approve' | 'deny'
+  if (!["approve", "deny"].includes(action)) return res.status(400).json({ error: "action must be 'approve' or 'deny'." });
+  try {
+    const itemRes = await pool.query("SELECT id, return_status FROM order_items WHERE id = $1 AND brand_id = $2", [req.params.itemId, req.brandId]);
+    if (itemRes.rows.length === 0) return res.status(404).json({ error: "Order item not found for this brand." });
+    if (itemRes.rows[0].return_status !== "requested") {
+      return res.status(400).json({ error: `No pending return request on this item (status: ${itemRes.rows[0].return_status}).` });
+    }
+    const newStatus = action === "approve" ? "approved" : "denied";
+    await pool.query("UPDATE order_items SET return_status = $1 WHERE id = $2", [newStatus, req.params.itemId]);
+    res.json({ id: req.params.itemId, returnStatus: newStatus });
+  } catch (err) {
+    console.error("respondToReturn error:", err);
+    res.status(500).json({ error: "Could not update return request.", detail: err.message });
+  }
+}
+
+// Brand confirms the physical item has arrived back with them. This is what
+// actually triggers the refund (return) or stock swap (exchange) — never
+// before the brand has the item in hand.
+async function confirmReturnReceived(req, res) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const itemRes = await client.query(
+      `SELECT oi.*, o.payment_ref, o.id AS order_id, p.name AS product_name,
+              c.email AS customer_email, c.full_name AS customer_name
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
+      [req.params.itemId, req.brandId]
+    );
+    if (itemRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Order item not found for this brand." });
+    }
+    const item = itemRes.rows[0];
+
+    if (item.return_status !== "approved") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `This item isn't awaiting a return (status: ${item.return_status}).` });
+    }
+
+    if (item.return_type === "exchange") {
+      // No money moves — swap stock: old size comes back, new size goes out.
+      await client.query("UPDATE product_variants SET stock_qty = stock_qty + $1 WHERE id = $2", [item.quantity, item.variant_id]);
+      await client.query("UPDATE product_variants SET stock_qty = GREATEST(stock_qty - $1, 0) WHERE id = $2", [item.quantity, item.exchange_variant_id]);
+      await client.query("UPDATE order_items SET return_status = 'received' WHERE id = $1", [item.id]);
+      await client.query("COMMIT");
+
+      try {
+        if (item.customer_email) {
+          await sendEmail({
+            to: item.customer_email,
+            subject: `Your exchange for order #${item.order_id} is being processed`,
+            html: `<div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+              <h2 style="color:#14282E;">Hi ${item.customer_name || "there"},</h2>
+              <p>We've received your returned <strong>${item.product_name}</strong> and your exchange is being prepared for shipment.</p>
+            </div>`,
+          });
+        }
+      } catch (emailErr) { console.error("Exchange confirmation email failed:", emailErr); }
+
+      return res.json({ id: item.id, returnStatus: "received", type: "exchange" });
+    }
+
+    // Return: real refund via Moyasar, same pattern as cancellation.
+    if (!process.env.MOYASAR_SECRET_KEY) {
+      await client.query("ROLLBACK");
+      return res.status(500).json({ error: "Payment gateway isn't configured yet." });
+    }
+    if (!item.payment_ref) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "No payment reference on this order — cannot process a refund." });
+    }
+
+    const refundHalalas = Math.round(Number(item.unit_price) * item.quantity * 100);
+    const moyasarRes = await fetch(`https://api.moyasar.com/v1/payments/${item.payment_ref}/refund`, {
+      method: "POST",
+      headers: {
+        Authorization: "Basic " + Buffer.from(`${process.env.MOYASAR_SECRET_KEY}:`).toString("base64"),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ amount: refundHalalas }),
+    });
+    const refundData = await moyasarRes.json();
+    if (!moyasarRes.ok) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Moyasar refund failed.", detail: refundData.message || refundData });
+    }
+
+    await client.query("UPDATE order_items SET return_status = 'received' WHERE id = $1", [item.id]);
+    await client.query("UPDATE product_variants SET stock_qty = stock_qty + $1 WHERE id = $2", [item.quantity, item.variant_id]);
+    await client.query("COMMIT");
+
+    try {
+      if (item.customer_email) {
+        await sendEmail({
+          to: item.customer_email,
+          subject: `Refund processed for order #${item.order_id}`,
+          html: `<div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+            <h2 style="color:#14282E;">Hi ${item.customer_name || "there"},</h2>
+            <p>We've received your returned <strong>${item.product_name}</strong> and processed your refund.</p>
+            <p>SAR ${Number(item.unit_price * item.quantity).toFixed(2)} will be returned to your original payment method — this can take a few business days to appear, depending on your bank.</p>
+          </div>`,
+        });
+      }
+    } catch (emailErr) { console.error("Return refund email failed:", emailErr); }
+
+    res.json({ id: item.id, returnStatus: "received", type: "return" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("confirmReturnReceived error:", err);
+    res.status(500).json({ error: "Could not process return.", detail: err.message });
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  placeOrder, getOrder, listBrandOrderItems, markShipped, requestCancellation, respondToCancellation,
+  requestReturn, respondToReturn, confirmReturnReceived,
+};
