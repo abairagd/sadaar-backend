@@ -6,7 +6,7 @@ async function listProducts(req, res) {
   try {
     const params = [];
     let query = `
-      SELECT p.id, p.name, p.description, p.category, p.subcategory, p.product_type, p.price, p.created_at,
+      SELECT p.id, p.name, p.description, p.category, p.subcategory, p.product_type, p.price, p.is_signature, p.created_at,
              b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug,
              (SELECT url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order ASC LIMIT 1) AS image_url
       FROM products p
@@ -77,6 +77,7 @@ async function getProduct(req, res) {
   }
 }
 
+// Requires brand auth (req.brandId set by middleware). Brand adds a product to their own catalog.
 async function createProduct(req, res) {
   const name = cleanString(req.body.name, 160);
   const description = cleanString(req.body.description, 4000);
@@ -131,6 +132,7 @@ async function createProduct(req, res) {
   }
 }
 
+// Brand updates the stock count for one of their own product's size variants.
 async function updateVariantStock(req, res) {
   const stockQty = Number(req.body.stockQty);
   if (!isNonNegativeInt(stockQty)) {
@@ -153,6 +155,11 @@ async function updateVariantStock(req, res) {
   }
 }
 
+// Brand removes a product. This archives it (status='archived') rather than
+// hard-deleting — a real delete would either fail (order_items references
+// products.id) or, worse, silently break historical order data if it
+// succeeded. Archived products stop showing in listProducts (which only
+// returns status='active') but existing orders/payouts referencing them stay intact.
 async function archiveProduct(req, res) {
   try {
     const { rows } = await pool.query(
@@ -167,6 +174,9 @@ async function archiveProduct(req, res) {
   }
 }
 
+// Brand edits their own product's details (name, description, price, category,
+// subcategory, product type). Does not touch variants/stock — that's the
+// separate updateVariantStock endpoint — or images, which have their own routes.
 async function updateProduct(req, res) {
   const name = cleanString(req.body.name, 160);
   const description = cleanString(req.body.description, 4000);
@@ -198,4 +208,25 @@ async function updateProduct(req, res) {
   }
 }
 
-module.exports = { listProducts, getProduct, createProduct, updateProduct, updateVariantStock, archiveProduct };
+// Brand marks/unmarks one of their products as a "signature product" shown
+// on their public profile page. A lightweight toggle — no need to resubmit
+// the whole product just to flip this.
+async function toggleSignatureProduct(req, res) {
+  const { isSignature } = req.body;
+  if (typeof isSignature !== "boolean") {
+    return res.status(400).json({ error: "isSignature must be true or false." });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE products SET is_signature = $1 WHERE id = $2 AND brand_id = $3 RETURNING id, is_signature`,
+      [isSignature, req.params.id, req.brandId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Product not found for this brand." });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("toggleSignatureProduct error:", err);
+    res.status(500).json({ error: "Could not update signature status.", detail: err.message });
+  }
+}
+
+module.exports = { listProducts, getProduct, createProduct, updateProduct, updateVariantStock, archiveProduct, toggleSignatureProduct };
