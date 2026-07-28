@@ -339,7 +339,7 @@ async function respondToCancellation(req, res) {
        JOIN orders o ON o.id = oi.order_id
        JOIN products p ON p.id = oi.product_id
        LEFT JOIN customers c ON c.id = o.customer_id
-       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE`,
+      WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
       [req.params.itemId, req.brandId]
     );
     if (itemRes.rows.length === 0) {
