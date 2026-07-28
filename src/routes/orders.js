@@ -1,11 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const requireBrandAuth = require("../middleware/requireBrandAuth");
+const { optionalCustomerAuth } = require("../middleware/requireCustomerAuth");
 const { placeOrder, getOrder, listBrandOrderItems, markShipped, requestCancellation, respondToCancellation } = require("../controllers/ordersController");
 const { confirmPayment } = require("../controllers/paymentsController");
 const { writeLimiter, authLimiter } = require("../middleware/rateLimiters");
 
-router.post("/", writeLimiter, placeOrder);
+router.post("/", writeLimiter, optionalCustomerAuth, placeOrder);
 router.get("/:id", authLimiter, getOrder); // contact-verification guess-proofing
 router.post("/:id/confirm-payment", confirmPayment);
 router.post("/:id/items/:itemId/request-cancellation", authLimiter, requestCancellation);
