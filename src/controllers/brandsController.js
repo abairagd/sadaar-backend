@@ -1,7 +1,9 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const pool = require("../db/pool");
 const { isValidEmail, isValidCategory, cleanString } = require("../utils/validators");
+const { sendEmail } = require("../utils/sendEmail");
 
 async function listBrands(req, res) {
   const { category } = req.query;
@@ -34,6 +36,7 @@ async function getBrand(req, res) {
   }
 }
 
+// A new brand applies to join SADAAR. Starts as "pending" until approved manually.
 async function applyBrand(req, res) {
   const name = cleanString(req.body.name, 120);
   const description = cleanString(req.body.description, 2000);
@@ -90,4 +93,75 @@ async function loginBrand(req, res) {
   }
 }
 
-module.exports = { listBrands, getBrand, applyBrand, loginBrand };
+// Brand requests a reset link. Always responds the same way whether or not
+// the email exists, so this endpoint can't be used to check which emails
+// have brand accounts.
+async function requestPasswordReset(req, res) {
+  const email = (req.body.email || "").trim();
+  if (!email || !isValidEmail(email)) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  try {
+    const { rows } = await pool.query("SELECT id, name FROM brands WHERE contact_email = $1", [email]);
+    if (rows.length > 0) {
+      const brand = rows[0];
+      const token = crypto.randomBytes(32).toString("hex");
+      await pool.query(
+        "UPDATE brands SET reset_token = $1, reset_token_expires = now() + interval '1 hour' WHERE id = $2",
+        [token, brand.id]
+      );
+      const resetUrl = `https://sadaar-brand-dashboard.vercel.app/?resetToken=${token}`;
+      try {
+        await sendEmail({
+          to: email,
+          subject: "Reset your SADAAR brand dashboard password",
+          html: `
+            <div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+              <h2 style="color:#14282E;">Hi ${brand.name},</h2>
+              <p>Click the link below to set a new password. This link expires in 1 hour.</p>
+              <p><a href="${resetUrl}" style="background:#14282E;color:#FBF8F1;padding:12px 24px;text-decoration:none;display:inline-block;">Reset password</a></p>
+              <p style="font-size:13px;color:#7A7566;">If you didn't request this, you can safely ignore this email.</p>
+            </div>
+          `,
+        });
+      } catch (emailErr) {
+        console.error("Password reset email failed:", emailErr);
+      }
+    }
+    res.json({ message: "If that email has a SADAAR brand account, a reset link has been sent." });
+  } catch (err) {
+    console.error("requestPasswordReset error:", err);
+    res.status(500).json({ error: "Could not process request.", detail: err.message });
+  }
+}
+
+// Brand submits their reset token + new password.
+async function resetPassword(req, res) {
+  const { token, password } = req.body;
+  if (!token || !password) {
+    return res.status(400).json({ error: "Token and new password are required." });
+  }
+  if (typeof password !== "string" || password.length < 4 || password.length > 200) {
+    return res.status(400).json({ error: "Password must be between 4 and 200 characters." });
+  }
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM brands WHERE reset_token = $1 AND reset_token_expires > now()",
+      [token]
+    );
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+    }
+    const passwordHash = await bcrypt.hash(password, 10);
+    await pool.query(
+      "UPDATE brands SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2",
+      [passwordHash, rows[0].id]
+    );
+    res.json({ message: "Password updated. You can now log in." });
+  } catch (err) {
+    console.error("resetPassword error:", err);
+    res.status(500).json({ error: "Could not reset password.", detail: err.message });
+  }
+}
+
+module.exports = { listBrands, getBrand, applyBrand, loginBrand, requestPasswordReset, resetPassword };
