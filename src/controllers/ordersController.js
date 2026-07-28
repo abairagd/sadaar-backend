@@ -109,12 +109,25 @@ async function placeOrder(req, res) {
 
     const finalTotal = Math.round((total - discountAmount) * 100) / 100;
 
-    const customerRes = await client.query(
-      `INSERT INTO customers (full_name, email, phone) VALUES ($1,$2,$3)
-       ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name RETURNING id`,
-      [customer.fullName, customer.email || null, customer.phone || null]
-    );
-    const customerId = customerRes.rows[0].id;
+    // If the customer is logged in, link the order directly to their account
+    // id — more reliable than matching by email alone, since they might type
+    // a different email into the shipping form than what's on their account.
+    // Guests (no token) keep working exactly as before via email upsert.
+    let customerId;
+    if (req.customerId) {
+      customerId = req.customerId;
+      await client.query(
+        "UPDATE customers SET full_name = $1, phone = COALESCE($2, phone) WHERE id = $3",
+        [customer.fullName, customer.phone || null, customerId]
+      );
+    } else {
+      const customerRes = await client.query(
+        `INSERT INTO customers (full_name, email, phone) VALUES ($1,$2,$3)
+         ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name RETURNING id`,
+        [customer.fullName, customer.email || null, customer.phone || null]
+      );
+      customerId = customerRes.rows[0].id;
+    }
 
     const orderRes = await client.query(
       `INSERT INTO orders (customer_id, subtotal, shipping_fee, discount_code, discount_amount, total, shipping_name, shipping_phone, shipping_city, shipping_address, payment_status)
@@ -286,7 +299,7 @@ async function requestCancellation(req, res) {
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
        LEFT JOIN customers c ON c.id = o.customer_id
-       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
+       WHERE oi.id = $1 AND oi.order_id = $2`,
       [req.params.itemId, req.params.id]
     );
     if (itemRes.rows.length === 0) return res.status(404).json({ error: "Order item not found." });
@@ -339,7 +352,7 @@ async function respondToCancellation(req, res) {
        JOIN orders o ON o.id = oi.order_id
        JOIN products p ON p.id = oi.product_id
        LEFT JOIN customers c ON c.id = o.customer_id
-      WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
+       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
       [req.params.itemId, req.brandId]
     );
     if (itemRes.rows.length === 0) {
