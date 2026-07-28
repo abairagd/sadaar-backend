@@ -286,7 +286,7 @@ async function requestCancellation(req, res) {
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
        LEFT JOIN customers c ON c.id = o.customer_id
-       WHERE oi.id = $1 AND oi.order_id = $2`,
+       WHERE oi.id = $1 AND oi.brand_id = $2 FOR UPDATE OF oi`,
       [req.params.itemId, req.params.id]
     );
     if (itemRes.rows.length === 0) return res.status(404).json({ error: "Order item not found." });
