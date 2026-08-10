@@ -131,6 +131,84 @@ async function createProduct(req, res) {
     client.release();
   }
 }
+// Add this function to src/controllers/productsController.js, and add
+// bulkCreateProducts to the module.exports line at the bottom.
+// Uses the exact same validation as the single-product createProduct
+// function above it — nothing new to trust, just applied per-row.
+
+async function bulkCreateProducts(req, res) {
+  const products = req.body.products;
+  if (!Array.isArray(products) || products.length === 0) {
+    return res.status(400).json({ error: "products array is required." });
+  }
+  if (products.length > 200) {
+    return res.status(400).json({ error: "Too many products in one upload (max 200)." });
+  }
+
+  const results = { created: 0, errors: [] };
+
+  for (let i = 0; i < products.length; i++) {
+    const row = products[i];
+    const rowNumber = i + 2; // +2 accounts for the header row and 1-indexing, matches what a brand sees in a spreadsheet
+
+    const name = cleanString(row.name, 160);
+    const description = cleanString(row.description, 4000);
+    const category = row.category;
+    const subcategory = cleanString(row.subcategory, 60);
+    const productType = cleanString(row.productType, 60);
+    const price = Number(row.price);
+    const sizesRaw = row.sizes || "";
+
+    if (!name || !category || !isPositiveNumber(price)) {
+      results.errors.push({ row: rowNumber, name: name || "(unnamed)", error: "Name, category, and a positive price are required." });
+      continue;
+    }
+    if (!isValidCategory(category)) {
+      results.errors.push({ row: rowNumber, name, error: `"${category}" isn't a valid category.` });
+      continue;
+    }
+
+    const sizes = sizesRaw.split(",").map((chunk) => {
+      const [size, stockQty] = chunk.split(":").map((s) => (s || "").trim());
+      return { size: size || "", stockQty: Number(stockQty) || 0 };
+    }).filter((v) => v.size);
+
+    if (sizes.length === 0) {
+      results.errors.push({ row: rowNumber, name, error: "At least one size is required (format: S:5, M:10)." });
+      continue;
+    }
+    if (sizes.length > 30) {
+      results.errors.push({ row: rowNumber, name, error: "Too many size variants (max 30)." });
+      continue;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const productRes = await client.query(
+        `INSERT INTO products (brand_id, name, description, category, subcategory, product_type, price)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [req.brandId, name, description || null, category, subcategory || null, productType || null, price]
+      );
+      const productId = productRes.rows[0].id;
+      for (const s of sizes) {
+        await client.query(
+          `INSERT INTO product_variants (product_id, size, stock_qty) VALUES ($1,$2,$3)`,
+          [productId, s.size, s.stockQty]
+        );
+      }
+      await client.query("COMMIT");
+      results.created++;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      results.errors.push({ row: rowNumber, name, error: "Could not save this product.", detail: err.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  res.json(results);
+}
 
 // Brand updates the stock count for one of their own product's size variants.
 async function updateVariantStock(req, res) {
@@ -229,4 +307,4 @@ async function toggleSignatureProduct(req, res) {
   }
 }
 
-module.exports = { listProducts, getProduct, createProduct, updateProduct, updateVariantStock, archiveProduct, toggleSignatureProduct };
+module.exports = { listProducts, getProduct, createProduct, updateProduct, bulkCreateProducts, updateVariantStock, archiveProduct, toggleSignatureProduct };
