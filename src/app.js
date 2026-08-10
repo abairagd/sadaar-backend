@@ -17,10 +17,26 @@ const customersRoutes = require("./routes/customers");
 const app = express();
 
 app.use(helmet());
+const allowedOrigins = [
+  "https://sadaar.com",
+  "https://www.sadaar.com",
+  "https://sadaar-nextjs.vercel.app",
+  "https://sadaar-brand-dashboard.vercel.app",
+  "https://sadaar-admin.vercel.app",
+  "https://sadaar-apply-brand.vercel.app",
+];
+
 app.use(cors({
-  origin: "*",
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
 }));
 app.options("*", cors());
 app.use(express.json({ limit: "100kb" }));
