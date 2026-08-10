@@ -54,9 +54,12 @@ app.use("/api/support", supportRoutes);
 app.use("/api/spotlight", spotlightRoutes);
 app.use("/api/customers", customersRoutes);
 
+const Sentry = require("@sentry/node");
+
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
 
-// eslint-disable-next-line no-unused-vars
+Sentry.setupExpressErrorHandler(app);
+
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ error: "Something went wrong." });
