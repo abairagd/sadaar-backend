@@ -274,20 +274,48 @@ async function markShipped(req, res) {
   try {
     const { rows } = await pool.query(
       `UPDATE order_items SET fulfillment_status = 'shipped', tracking_number = $1, shipped_at = now()
-       WHERE id = $2 AND brand_id = $3 RETURNING id`,
+       WHERE id = $2 AND brand_id = $3 RETURNING id, order_id, product_id, brand_id`,
       [trackingNumber || null, req.params.itemId, req.brandId]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Order item not found for this brand." });
-    res.json({ id: rows[0].id, status: "shipped" });
+    const item = rows[0];
+
+    try {
+      const detailsRes = await pool.query(
+        `SELECT c.email AS customer_email, c.full_name AS customer_name,
+                p.name AS product_name, b.name AS brand_name
+         FROM order_items oi
+         JOIN orders o ON o.id = oi.order_id
+         LEFT JOIN customers c ON c.id = o.customer_id
+         JOIN products p ON p.id = oi.product_id
+         JOIN brands b ON b.id = oi.brand_id
+         WHERE oi.id = $1`,
+        [req.params.itemId]
+      );
+      const details = detailsRes.rows[0];
+      if (details && details.customer_email) {
+        await sendEmail({
+          to: details.customer_email,
+          subject: `Your SADAAR order #${item.order_id} has shipped`,
+          html: `
+            <div style="font-family:Arial,sans-serif;color:#22201B;max-width:480px;margin:0 auto;">
+              <h2 style="color:#14282E;">Hi ${details.customer_name || "there"},</h2>
+              <p><strong>${details.product_name}</strong> from <strong>${details.brand_name}</strong> is on its way.</p>
+              ${trackingNumber ? `<p>Tracking number: <strong>${trackingNumber}</strong></p>` : ""}
+              <p>You can check the status of this and any other items on your order anytime from the Track Order page.</p>
+            </div>
+          `,
+        });
+      }
+    } catch (emailErr) {
+      console.error("Shipping notification email failed:", emailErr);
+    }
+
+    res.json({ id: item.id, status: "shipped" });
   } catch (err) {
     res.status(500).json({ error: "Could not update fulfillment status.", detail: err.message });
   }
 }
-
-// Customer requests cancellation of a single line item (not the whole order,
-// since each brand fulfills independently). Requires the same email/phone
-// verification as order lookup — the item must still be pending (not
-// shipped) and belong to a paid order.
 async function requestCancellation(req, res) {
   const { contact } = req.body;
   if (!contact) {
