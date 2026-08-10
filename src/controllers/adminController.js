@@ -189,4 +189,4 @@ async function listAllOrderItems(req, res) {
     res.status(500).json({ error: "Could not load order items.", detail: err.message });
   }
 }
-module.exports = { listAllBrands, updateBrandStatus, updateBrandCommission, platformStats, listPendingPayouts, markBrandPayoutsPaid, listAllOrders, listAllOrderItems };
+module.exports = { listAllBrands, updateBrandStatus, updateBrandVetting, updateBrandCommission, platformStats, listPendingPayouts, markBrandPayoutsPaid, listAllOrders, listAllOrderItems };

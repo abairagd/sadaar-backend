@@ -7,7 +7,7 @@ const { authLimiter } = require("../middleware/rateLimiters");
 router.post("/login", authLimiter, adminLogin);
 router.get("/brands", requireAdminAuth, listAllBrands);
 router.patch("/brands/:id/status", requireAdminAuth, updateBrandStatus);
-router.patch("/brands/:id/vetting", updateBrandVetting);
+router.patch("/brands/:id/vetting", requireAdminAuth, updateBrandVetting);
 router.patch("/brands/:id/commission", requireAdminAuth, updateBrandCommission);
 router.get("/stats", requireAdminAuth, platformStats);
 router.get("/payouts", requireAdminAuth, listPendingPayouts);
