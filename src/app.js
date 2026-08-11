@@ -24,6 +24,7 @@ const allowedOrigins = [
   "https://sadaar-brand-dashboard.vercel.app",
   "https://sadaar-admin.vercel.app",
   "https://sadaar-apply-brand.vercel.app",
+  "http://localhost:3000", // local development testing only
 ];
 
 app.use(cors({
