@@ -4,13 +4,14 @@ const requireBrandAuth = require("../middleware/requireBrandAuth");
 const { optionalCustomerAuth } = require("../middleware/requireCustomerAuth");
 const {
   placeOrder, getOrder, listBrandOrderItems, markShipped, requestCancellation, respondToCancellation,
-  requestReturn, respondToReturn, confirmReturnReceived,
+  requestReturn, respondToReturn, confirmReturnReceived, getOrderReceipt,
 } = require("../controllers/ordersController");
 const { confirmPayment } = require("../controllers/paymentsController");
 const { writeLimiter, authLimiter } = require("../middleware/rateLimiters");
 
 router.post("/", writeLimiter, optionalCustomerAuth, placeOrder);
 router.get("/:id", authLimiter, getOrder); // contact-verification guess-proofing
+router.get("/:id/receipt", authLimiter, optionalCustomerAuth, getOrderReceipt);
 router.post("/:id/confirm-payment", confirmPayment);
 router.post("/:id/items/:itemId/request-cancellation", authLimiter, requestCancellation);
 router.post("/:id/items/:itemId/request-return", authLimiter, requestReturn);
