@@ -37,14 +37,29 @@ async function createSpotlightPurchase(req, res) {
         return res.status(403).json({ error: "Your brand isn't set up to sell in that category. Contact SADAAR to add it." });
       }
     }
-    // Don't let a brand pay twice for a space it already holds.
+    // Only one brand can hold a space at a time.
     const activeRes = await pool.query(
-      `SELECT ends_at FROM spotlight_slots
-       WHERE brand_id = $1 AND placement = $2 AND payment_status = 'paid' AND ends_at > now() LIMIT 1`,
-      [req.brandId, placement]
+      `SELECT brand_id, ends_at FROM spotlight_slots
+       WHERE placement = $1 AND payment_status = 'paid' AND ends_at > now()
+       ORDER BY ends_at DESC LIMIT 1`,
+      [placement]
     );
     if (activeRes.rows.length > 0) {
-      return res.status(409).json({ error: `You already have an active spotlight on this space until ${new Date(activeRes.rows[0].ends_at).toLocaleDateString()}.` });
+      const until = new Date(activeRes.rows[0].ends_at).toLocaleDateString();
+      return res.status(409).json({
+        error: activeRes.rows[0].brand_id === req.brandId
+          ? `You already have an active spotlight on this space until ${until}.`
+          : `This space is taken until ${until}. You can book it after that date.`,
+      });
+    }
+    // Hold the space for 15 minutes while another brand is paying for it.
+    const holdRes = await pool.query(
+      `SELECT 1 FROM spotlight_slots
+       WHERE placement = $1 AND payment_status = 'unpaid' AND brand_id <> $2 AND created_at > now() - interval '15 minutes' LIMIT 1`,
+      [placement, req.brandId]
+    );
+    if (holdRes.rows.length > 0) {
+      return res.status(409).json({ error: "Another brand is booking this space right now. Please try again in 15 minutes." });
     }
     const { rows } = await pool.query(
       `INSERT INTO spotlight_slots (brand_id, duration_days, price, placement) VALUES ($1,$2,$3,$4) RETURNING id, price, placement`,
@@ -85,6 +100,17 @@ async function confirmSpotlightPayment(req, res) {
     }
     if (payment.status !== "paid") {
       return res.status(400).json({ error: `Payment status is "${payment.status}", not paid.` });
+    }
+
+    // Final guard: never put a second brand on a space that is already taken.
+    const takenRes = await pool.query(
+      `SELECT 1 FROM spotlight_slots
+       WHERE placement = $1 AND payment_status = 'paid' AND ends_at > now() AND id <> $2 LIMIT 1`,
+      [slot.placement, slotId]
+    );
+    if (takenRes.rows.length > 0) {
+      console.error(`Spotlight conflict: payment ${payment.id} for slot ${slotId} on ${slot.placement}, space already taken. Refund needed.`);
+      return res.status(409).json({ error: "This space was just taken by another brand. Please contact SADAAR for a refund." });
     }
 
     const { rows } = await pool.query(
