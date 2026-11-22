@@ -17,12 +17,12 @@ function isValidBrandCategory(category) {
 }
 
 // Which product categories a brand may list in, based on what it chose when it
-// applied (changed only by an admin). Unknown values fall back to everything so
-// an old brand record can never get locked out.
+// applied (changed only by an admin). Perfumes needs explicit approval, so an
+// unknown or missing value falls back to Men and Women only — never Perfumes.
 function categoriesForBrand(brandCategory) {
   if (brandCategory === "Both") return ["Men", "Women"];
   if (ALLOWED_CATEGORIES.includes(brandCategory)) return [brandCategory];
-  return [...ALLOWED_CATEGORIES];
+  return ["Men", "Women"];
 }
 
 function cleanString(value, maxLen) {

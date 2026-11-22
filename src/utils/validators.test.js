@@ -148,8 +148,8 @@ describe("categoriesForBrand", () => {
   test("Both means Men and Women, not Perfumes", () => {
     expect(categoriesForBrand("Both")).toEqual(["Men", "Women"]);
   });
-  test("unknown or missing values do not lock a brand out", () => {
-    expect(categoriesForBrand(undefined)).toEqual(["Men", "Women", "Perfumes"]);
-    expect(categoriesForBrand("Kids")).toEqual(["Men", "Women", "Perfumes"]);
+  test("unknown or missing values never unlock Perfumes", () => {
+    expect(categoriesForBrand(undefined)).toEqual(["Men", "Women"]);
+    expect(categoriesForBrand("Kids")).toEqual(["Men", "Women"]);
   });
 });
