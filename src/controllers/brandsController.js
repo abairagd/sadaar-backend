@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("../db/pool");
-const { isValidEmail, isValidCategory, cleanString } = require("../utils/validators");
+const { isValidEmail, isValidBrandCategory, cleanString } = require("../utils/validators");
 const { sendEmail } = require("../utils/sendEmail");
 
 async function listBrands(req, res) {
@@ -96,7 +96,7 @@ async function applyBrand(req, res) {
   if (!isValidEmail(contactEmail)) {
     return res.status(400).json({ error: "Enter a valid contact email." });
   }
-  if (!isValidCategory(category)) {
+  if (!isValidBrandCategory(category)) {
     return res.status(400).json({ error: "Choose a valid category." });
   }
   if (typeof password !== "string" || password.length < 4 || password.length > 200) {

@@ -1,6 +1,7 @@
 const {
   isValidEmail,
   isValidCategory,
+  isValidBrandCategory,
   cleanString,
   isPositiveNumber,
   isNonNegativeInt,
@@ -36,6 +37,9 @@ describe("isValidEmail", () => {
 describe("isValidCategory", () => {
   test("accepts Men", () => {
     expect(isValidCategory("Men")).toBe(true);
+  });
+  test("accepts Perfumes", () => {
+    expect(isValidCategory("Perfumes")).toBe(true);
   });
   test("accepts Women", () => {
     expect(isValidCategory("Women")).toBe(true);
@@ -116,5 +120,20 @@ describe("isNonNegativeInt", () => {
   });
   test("rejects non-numeric strings", () => {
     expect(isNonNegativeInt("abc")).toBe(false);
+  });
+});
+
+describe("isValidBrandCategory", () => {
+  test("accepts Men, Women, Perfumes and Both", () => {
+    for (const c of ["Men", "Women", "Perfumes", "Both"]) {
+      expect(isValidBrandCategory(c)).toBe(true);
+    }
+  });
+  test("rejects anything else", () => {
+    expect(isValidBrandCategory("Kids")).toBe(false);
+    expect(isValidBrandCategory("")).toBe(false);
+  });
+  test("products still cannot be Both", () => {
+    expect(isValidCategory("Both")).toBe(false);
   });
 });
