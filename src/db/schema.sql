@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS spotlight_slots (
   payment_ref   VARCHAR(120),
   starts_at     TIMESTAMPTZ,
   ends_at       TIMESTAMPTZ,
+  placement     VARCHAR(20) NOT NULL DEFAULT 'Home',
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -1,27 +1,53 @@
 const pool = require("../db/pool");
+const { categoriesForBrand } = require("../utils/validators");
 
-const SPOTLIGHT_TIERS = {
-  7: 200,
-  14: 350,
-  30: 600,
+// Each placement is its own paid space, priced per duration (days -> SAR).
+// The homepage is the most visible, so it costs the most. Edit prices here.
+const SPOTLIGHT_PRICES = {
+  Home: { 7: 200, 14: 350, 30: 600 },
+  Men: { 7: 120, 14: 210, 30: 360 },
+  Women: { 7: 120, 14: 210, 30: 360 },
+  Perfumes: { 7: 120, 14: 210, 30: 360 },
 };
+const PLACEMENTS = Object.keys(SPOTLIGHT_PRICES);
 
 async function getPricing(req, res) {
-  res.json(SPOTLIGHT_TIERS);
+  res.json(SPOTLIGHT_PRICES);
 }
 
 async function createSpotlightPurchase(req, res) {
+  const placement = req.body.placement || "Home";
+  if (!PLACEMENTS.includes(placement)) {
+    return res.status(400).json({ error: "Choose a valid spotlight space (Home, Men, Women, or Perfumes)." });
+  }
   const durationDays = Number(req.body.durationDays);
-  const price = SPOTLIGHT_TIERS[durationDays];
+  const price = SPOTLIGHT_PRICES[placement][durationDays];
   if (!price) {
     return res.status(400).json({ error: "Choose a valid duration (7, 14, or 30 days)." });
   }
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO spotlight_slots (brand_id, duration_days, price) VALUES ($1,$2,$3) RETURNING id, price`,
-      [req.brandId, durationDays, price]
+    // A brand can take the homepage, or the page of a category it is approved to sell in.
+    if (placement !== "Home") {
+      const brandRes = await pool.query("SELECT category FROM brands WHERE id = $1", [req.brandId]);
+      const allowed = categoriesForBrand(brandRes.rows[0] && brandRes.rows[0].category);
+      if (!allowed.includes(placement)) {
+        return res.status(403).json({ error: "Your brand isn't set up to sell in that category. Contact SADAAR to add it." });
+      }
+    }
+    // Don't let a brand pay twice for a space it already holds.
+    const activeRes = await pool.query(
+      `SELECT ends_at FROM spotlight_slots
+       WHERE brand_id = $1 AND placement = $2 AND payment_status = 'paid' AND ends_at > now() LIMIT 1`,
+      [req.brandId, placement]
     );
-    res.status(201).json({ id: rows[0].id, price: Number(rows[0].price) });
+    if (activeRes.rows.length > 0) {
+      return res.status(409).json({ error: `You already have an active spotlight on this space until ${new Date(activeRes.rows[0].ends_at).toLocaleDateString()}.` });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO spotlight_slots (brand_id, duration_days, price, placement) VALUES ($1,$2,$3,$4) RETURNING id, price, placement`,
+      [req.brandId, durationDays, price, placement]
+    );
+    res.status(201).json({ id: rows[0].id, price: Number(rows[0].price), placement: rows[0].placement });
   } catch (err) {
     console.error("createSpotlightPurchase error:", err);
     res.status(500).json({ error: "Could not start spotlight purchase.", detail: err.message });
@@ -75,7 +101,7 @@ async function confirmSpotlightPayment(req, res) {
 async function listActiveSpotlights(req, res) {
   try {
     const { rows } = await pool.query(`
-      SELECT s.id, s.ends_at, b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug, b.description AS brand_description, b.category
+      SELECT s.id, s.ends_at, s.placement, b.id AS brand_id, b.name AS brand_name, b.slug AS brand_slug, b.description AS brand_description, b.category
       FROM spotlight_slots s
       JOIN brands b ON b.id = s.brand_id
       WHERE s.payment_status = 'paid' AND s.ends_at > now() AND b.status = 'active'
