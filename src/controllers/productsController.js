@@ -1,5 +1,14 @@
 const pool = require("../db/pool");
-const { isValidCategory, cleanString, isPositiveNumber, isNonNegativeInt } = require("../utils/validators");
+const { isValidCategory, categoriesForBrand, cleanString, isPositiveNumber, isNonNegativeInt } = require("../utils/validators");
+
+// The categories this brand may list in (set by what it chose when applying;
+// only an admin can change it).
+async function getAllowedCategories(brandId) {
+  const { rows } = await pool.query("SELECT category FROM brands WHERE id = $1", [brandId]);
+  return categoriesForBrand(rows[0] && rows[0].category);
+}
+
+const NOT_ALLOWED_MSG = "Your brand isn't set up to sell in that category. Contact SADAAR to add it.";
 
 async function listProducts(req, res) {
   const { category, subcategory, productType, brandId, sort, minPrice, maxPrice, search } = req.query;
@@ -93,6 +102,9 @@ async function createProduct(req, res) {
   if (!isValidCategory(category)) {
     return res.status(400).json({ error: "Choose a valid category." });
   }
+  if (!(await getAllowedCategories(req.brandId)).includes(category)) {
+    return res.status(403).json({ error: NOT_ALLOWED_MSG });
+  }
   if (sizes.length > 30) {
     return res.status(400).json({ error: "Too many size variants (max 30)." });
   }
@@ -147,6 +159,7 @@ async function bulkCreateProducts(req, res) {
 
   const results = { created: 0, errors: [] };
 
+  const allowedCategories = await getAllowedCategories(req.brandId);
   for (let i = 0; i < products.length; i++) {
     const row = products[i];
     const rowNumber = i + 2; // +2 accounts for the header row and 1-indexing, matches what a brand sees in a spreadsheet
@@ -165,6 +178,10 @@ async function bulkCreateProducts(req, res) {
     }
     if (!isValidCategory(category)) {
       results.errors.push({ row: rowNumber, name, error: `"${category}" isn't a valid category.` });
+      continue;
+    }
+    if (!allowedCategories.includes(category)) {
+      results.errors.push({ row: rowNumber, name, error: `Your brand isn't set up to sell in "${category}". Contact SADAAR to add it.` });
       continue;
     }
 
@@ -271,6 +288,14 @@ async function updateProduct(req, res) {
   }
 
   try {
+    // A brand can always keep a product in its current category (even if its
+    // allowed categories changed later); it can only move one into an allowed one.
+    const current = await pool.query("SELECT category FROM products WHERE id = $1 AND brand_id = $2", [req.params.id, req.brandId]);
+    if (current.rows.length > 0 && current.rows[0].category !== category) {
+      if (!(await getAllowedCategories(req.brandId)).includes(category)) {
+        return res.status(403).json({ error: NOT_ALLOWED_MSG });
+      }
+    }
     const { rows } = await pool.query(
       `UPDATE products
        SET name = $1, description = $2, category = $3, subcategory = $4, product_type = $5, price = $6

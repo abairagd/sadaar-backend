@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { isValidBrandCategory } = require("../utils/validators");
 
 async function listAllBrands(req, res) {
   try {
@@ -82,6 +83,25 @@ async function updateBrandCommission(req, res) {
   } catch (err) {
     console.error("updateBrandCommission error:", err);
     res.status(500).json({ error: "Could not update commission rate.", detail: err.message });
+  }
+}
+
+// Admin changes which categories a brand may sell in (Men, Women, Both, Perfumes).
+async function updateBrandCategory(req, res) {
+  const category = req.body.category;
+  if (!isValidBrandCategory(category)) {
+    return res.status(400).json({ error: "Choose Men, Women, Both, or Perfumes." });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE brands SET category = $1 WHERE id = $2 RETURNING id, name, category`,
+      [category, req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Brand not found." });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error("updateBrandCategory error:", err);
+    res.status(500).json({ error: "Could not update brand category.", detail: err.message });
   }
 }
 
@@ -189,4 +209,4 @@ async function listAllOrderItems(req, res) {
     res.status(500).json({ error: "Could not load order items.", detail: err.message });
   }
 }
-module.exports = { listAllBrands, updateBrandStatus, updateBrandVetting, updateBrandCommission, platformStats, listPendingPayouts, markBrandPayoutsPaid, listAllOrders, listAllOrderItems };
+module.exports = { listAllBrands, updateBrandStatus, updateBrandVetting, updateBrandCommission, updateBrandCategory, platformStats, listPendingPayouts, markBrandPayoutsPaid, listAllOrders, listAllOrderItems };

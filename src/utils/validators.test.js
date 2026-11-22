@@ -2,6 +2,7 @@ const {
   isValidEmail,
   isValidCategory,
   isValidBrandCategory,
+  categoriesForBrand,
   cleanString,
   isPositiveNumber,
   isNonNegativeInt,
@@ -135,5 +136,20 @@ describe("isValidBrandCategory", () => {
   });
   test("products still cannot be Both", () => {
     expect(isValidCategory("Both")).toBe(false);
+  });
+});
+
+describe("categoriesForBrand", () => {
+  test("single-category brands can only list in that category", () => {
+    expect(categoriesForBrand("Men")).toEqual(["Men"]);
+    expect(categoriesForBrand("Women")).toEqual(["Women"]);
+    expect(categoriesForBrand("Perfumes")).toEqual(["Perfumes"]);
+  });
+  test("Both means Men and Women, not Perfumes", () => {
+    expect(categoriesForBrand("Both")).toEqual(["Men", "Women"]);
+  });
+  test("unknown or missing values do not lock a brand out", () => {
+    expect(categoriesForBrand(undefined)).toEqual(["Men", "Women", "Perfumes"]);
+    expect(categoriesForBrand("Kids")).toEqual(["Men", "Women", "Perfumes"]);
   });
 });

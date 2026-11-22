@@ -16,6 +16,15 @@ function isValidBrandCategory(category) {
   return ALLOWED_BRAND_CATEGORIES.includes(category);
 }
 
+// Which product categories a brand may list in, based on what it chose when it
+// applied (changed only by an admin). Unknown values fall back to everything so
+// an old brand record can never get locked out.
+function categoriesForBrand(brandCategory) {
+  if (brandCategory === "Both") return ["Men", "Women"];
+  if (ALLOWED_CATEGORIES.includes(brandCategory)) return [brandCategory];
+  return [...ALLOWED_CATEGORIES];
+}
+
 function cleanString(value, maxLen) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -33,4 +42,4 @@ function isNonNegativeInt(value) {
   return Number.isInteger(n) && n >= 0;
 }
 
-module.exports = { isValidEmail, isValidCategory, isValidBrandCategory, cleanString, isPositiveNumber, isNonNegativeInt, ALLOWED_CATEGORIES };
+module.exports = { isValidEmail, isValidCategory, isValidBrandCategory, categoriesForBrand, cleanString, isPositiveNumber, isNonNegativeInt, ALLOWED_CATEGORIES };
